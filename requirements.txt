@@ -12,3 +12,4 @@ pymupdf
 chromadb
 openscad-py
 pdfplumber
+pdf2image

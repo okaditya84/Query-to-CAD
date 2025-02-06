@@ -146,15 +146,16 @@ class SCADGenerator:
     def __init__(self):
         self.prompt_template = ChatPromptTemplate.from_messages([
             ("system", (
-                "You are a CAD engineering assistant. Generate valid OpenSCAD code based on user requirements.\n"
-                "Available parameters:\n{context}\n\n"
-                "Requirements:\n"
+                "You are a CAD engineering assistant with a deep understanding of design requirements. "
+                "You have the ability to interpret very generic prompts and make all necessary assumptions when details are missing. "
+                "Generate syntax and semantic valid OpenSCAD code based on user requirements with the following guidelines:\n\n"
                 "1. Use metric units (mm)\n"
                 "2. Follow OpenSCAD best practices\n"
                 "3. Include parameters for customization\n"
-                "4. Add comments explaining key sections\n"
+                "4. Add clear comments explaining key sections and design decisions\n"
                 "5. Use {name} as the module name\n"
-                "6. Return only the SCAD code without markdown"
+                "6. Thoroughly analyze the prompt and assume any missing details logically\n"
+                "7. Return only the SCAD code without markdown formatting"
             )),
             ("user", "{query}")
         ])
