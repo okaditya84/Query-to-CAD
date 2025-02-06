@@ -11,3 +11,4 @@ fitz
 pymupdf
 chromadb
 openscad-py
+pdfplumber
