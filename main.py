@@ -156,6 +156,7 @@ class SCADGenerator:
                 "5. Use {name} as the module name\n"
                 "6. Thoroughly analyze the prompt and assume any missing details logically\n"
                 "7. Return only the SCAD code without markdown formatting"
+                "Perform introspective research over the uploaded documents for syntax, types of parameters and all such stuff and then only give me the code which is full robust. It should be completely working so much so that I just have to copy paste your code and it should be perfect."
             )),
             ("user", "{query}")
         ])
