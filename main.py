@@ -247,7 +247,7 @@ class SCADGenerator:
                 collection_name="cad_designs",
                 client_settings=ChromaSettings(
                     chroma_db_impl="duckdb+parquet",
-                    persist_directory=VECTOR_STORE_DIR
+                    anonymized_telemetry=False
                 )
             ).similarity_search(query, k=k)
         except Exception as e:
@@ -334,8 +334,8 @@ def save_to_vector_store(docs: List[Document]):
                 embedding_function=embeddings,
                 collection_name="cad_designs",
                 client_settings=ChromaSettings(
-                    chroma_db_impl="duckdb+parquet",
-                    persist_directory=VECTOR_STORE_DIR
+                    embedding_function_redownload=True,
+                    anonymized_telemetry=False
                 )
             )
             vector_store.add_documents(docs)
@@ -347,7 +347,7 @@ def save_to_vector_store(docs: List[Document]):
                 collection_name="cad_designs",
                 client_settings=ChromaSettings(
                     chroma_db_impl="duckdb+parquet",
-                    persist_directory=VECTOR_STORE_DIR
+                    anonymized_telemetry=False
                 )
             )
             
@@ -452,7 +452,11 @@ def main():
                     results = Chroma(
                         persist_directory=VECTOR_STORE_DIR,
                         embedding_function=GoogleGenerativeAIEmbeddings(),
-                        collection_name="cad_designs"
+                        collection_name="cad_designs",
+                        client_settings=ChromaSettings(
+                            chroma_db_impl="duckdb+parquet",
+                            anonymized_telemetry=False
+                        )
                     ).similarity_search(search_query, k=k_results)
                     
                     for idx, doc in enumerate(results):
