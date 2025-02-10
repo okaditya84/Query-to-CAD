@@ -13,3 +13,4 @@ chromadb
 openscad-py
 pdfplumber
 pdf2image
+python-poppler

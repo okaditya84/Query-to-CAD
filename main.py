@@ -2,6 +2,7 @@ import os
 import base64
 import tempfile
 import logging
+import shutil  # For checking if poppler is installed
 from pathlib import Path
 from typing import List, Dict, Any
 from io import BytesIO
@@ -19,6 +20,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_groq import ChatGroq
+
+# Import ChromaSettings to configure the vector store client
+from chromadb.config import Settings as ChromaSettings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -43,14 +47,35 @@ class CADVisionProcessor:
         )
         
     def extract_images_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract page images from PDF using pdf2image"""
+        """Extract page images from PDF using pdf2image and compress if they are too large"""
         images = []
+        MAX_IMAGE_SIZE = 500 * 1024  # 500 KB threshold
+
+        # Check if poppler is installed (pdftoppm must be in PATH)
+        if not shutil.which("pdftoppm"):
+            logger.error("Poppler is not installed or not in PATH. Please install poppler to enable image extraction.")
+            return images  # Return empty list if poppler is not available
+
         try:
             pil_images = convert_from_path(pdf_path)
             for page_num, pil_image in enumerate(pil_images):
-                img_byte_arr = BytesIO()
-                pil_image.save(img_byte_arr, format="JPEG")
-                image_bytes = img_byte_arr.getvalue()
+                try:
+                    # Save the image to a BytesIO buffer in JPEG format
+                    img_byte_arr = BytesIO()
+                    pil_image.save(img_byte_arr, format="JPEG")
+                    image_bytes = img_byte_arr.getvalue()
+
+                    # If the image is larger than the threshold, recompress it with lower quality
+                    if len(image_bytes) > MAX_IMAGE_SIZE:
+                        logger.info(f"Page {page_num + 1} image ({len(image_bytes)} bytes) exceeds threshold. Recompressing...")
+                        compressed_arr = BytesIO()
+                        pil_image.save(compressed_arr, format="JPEG", quality=70, optimize=True)
+                        image_bytes = compressed_arr.getvalue()
+                        logger.info(f"Compressed image size: {len(image_bytes)} bytes")
+                except Exception as inner_e:
+                    logger.error(f"Error processing image for page {page_num + 1}: {str(inner_e)}")
+                    continue
+
                 images.append({
                     "page": page_num + 1,
                     "index": 0,
@@ -60,6 +85,7 @@ class CADVisionProcessor:
         except Exception as e:
             logger.error(f"Error extracting images: {str(e)}")
         return images
+
     
     def analyze_image_with_groq(self, image_bytes: bytes) -> str:
         """Analyze CAD image using Groq's vision model"""
@@ -74,7 +100,7 @@ class CADVisionProcessor:
             base64_image = base64.b64encode(image_bytes).decode('utf-8')
             
             response = client.chat.completions.create(
-                model="llama-3.2-90b-vision-preview",
+                model="llama-3.2-11b-vision-preview",
                 messages=[{
                     "role": "user",
                     "content": [
@@ -96,8 +122,8 @@ class CADVisionProcessor:
                         }
                     ]
                 }],
-                temperature=0.1,
-                max_tokens=2048
+                temperature=0.5,
+                max_tokens=5000
             )
             
             return response.choices[0].message.content
@@ -155,25 +181,38 @@ class SCADGenerator:
                 "4. Add clear comments explaining key sections and design decisions\n"
                 "5. Use {name} as the module name\n"
                 "6. Thoroughly analyze the prompt and assume any missing details logically\n"
-                "7. Return only the SCAD code without markdown formatting"
-                "Perform introspective research over the uploaded documents for syntax, types of parameters and all such stuff and then only give me the code which is full robust. It should be completely working so much so that I just have to copy paste your code and it should be perfect."
+                "7. Return only the SCAD code without markdown formatting. "
+                "Perform introspective research over the uploaded documents for syntax, types of parameters, and all such details then provide complete, robust, and fully working code."
             )),
             ("user", "{query}")
         ])
         
         self.llm = self._initialize_llm()
         self.embeddings = self._initialize_embeddings()
+        self.refinement_llm = self._initialize_refinement_llm()
         
     def _initialize_llm(self):
         """Initialize Groq LLM with fallback"""
         try:
             return ChatGroq(
                 temperature=0.3,
-                model_name="mixtral-8x7b-32768",
+                model_name="llama-3.3-70b-versatile",
                 api_key=os.getenv("GROQ_API_KEY")
             )
         except Exception as e:
             logger.error(f"LLM initialization failed: {str(e)}")
+            return None
+            
+    def _initialize_refinement_llm(self):
+        """Initialize the second LLM for code refinement"""
+        try:
+            return ChatGroq(
+                temperature=0.2,
+                model_name="deepseek-r1-distill-llama-70b",
+                api_key=os.getenv("GROQ_API_KEY")
+            )
+        except Exception as e:
+            logger.error(f"Refinement LLM initialization failed: {str(e)}")
             return None
             
     def _initialize_embeddings(self):
@@ -206,20 +245,57 @@ class SCADGenerator:
             logger.error(f"Vector store retrieval failed: {str(e)}")
             return []
     
+    def refine_code(self, query: str, initial_code: str, context: str, name: str) -> str:
+        """Refine the generated SCAD code using a second LLM"""
+        try:
+            refinement_prompt = ChatPromptTemplate.from_messages([
+                ("system", (
+                    "You are an expert OpenSCAD code reviewer. Your job is to analyze OpenSCAD code and improve it for robustness, syntax correctness, and complete alignment with the user's design requirements. "
+                    "Consider also the context provided from related documents analysis and vector store data. "
+                    "Return only the final refined OpenSCAD code without any explanations or markdown formatting."
+                )),
+                ("user", (
+                    "User design query: {query}\n\n"
+                    "Context from documents: {context}\n\n"
+                    "Initial generated code:\n\n{initial_code}\n\n"
+                    "Please refine the above code to perfection."
+                ))
+            ])
+            
+            chain = refinement_prompt | self.refinement_llm | StrOutputParser()
+            refined_code = chain.invoke({
+                "query": query,
+                "context": context,
+                "initial_code": initial_code,
+                "name": name
+            })
+            return refined_code
+        except Exception as e:
+            logger.error(f"Code refinement failed: {str(e)}")
+            return initial_code
+
     def generate_code(self, query: str, name: str = "GeneratedDesign") -> str:
-        """Generate SCAD code using RAG pipeline"""
+        """Generate SCAD code using RAG pipeline with an extra refinement pass"""
         try:
             context_docs = self.retrieve_designs(query)
             context = "\n\n".join([doc.page_content for doc in context_docs])
             
             if self.llm:
                 chain = self.prompt_template | self.llm | StrOutputParser()
-                return chain.invoke({
+                generated_code = chain.invoke({
                     "context": context,
                     "query": query,
                     "name": name
                 })
-            return f"module {name}() {{\n    // Error: LLM not available\n}}"
+            else:
+                generated_code = f"module {name}() {{\n    // Error: Primary LLM not available\n}}"
+            
+            # Call second LLM for refinement
+            if self.refinement_llm:
+                refined_code = self.refine_code(query, generated_code, context, name)
+                return refined_code
+            else:
+                return generated_code
         except Exception as e:
             logger.error(f"Code generation failed: {str(e)}")
             return f"module {name}() {{\n    // Error: {str(e)}\n}}"
