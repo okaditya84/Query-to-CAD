@@ -50,6 +50,7 @@ class CADVisionProcessor:
         """Extract page images from PDF using pdf2image and compress if they are too large"""
         images = []
         MAX_IMAGE_SIZE = 500 * 1024  # 500 KB threshold
+        MAX_PIXEL_COUNT = 33177600  # Maximum allowed pixels
 
         # Check if poppler is installed (pdftoppm must be in PATH)
         if not shutil.which("pdftoppm"):
@@ -59,6 +60,14 @@ class CADVisionProcessor:
         try:
             pil_images = convert_from_path(pdf_path)
             for page_num, pil_image in enumerate(pil_images):
+                # Check and resize if the image exceeds the allowed pixel count
+                w, h = pil_image.size
+                if w * h > MAX_PIXEL_COUNT:
+                    factor = (MAX_PIXEL_COUNT / (w * h)) ** 0.5
+                    new_size = (int(w * factor), int(h * factor))
+                    logger.info(f"Resizing page {page_num + 1} image from {pil_image.size} to {new_size} to meet pixel limit.")
+                    pil_image = pil_image.resize(new_size, Image.ANTIALIAS)
+
                 try:
                     # Save the image to a BytesIO buffer in JPEG format
                     img_byte_arr = BytesIO()
